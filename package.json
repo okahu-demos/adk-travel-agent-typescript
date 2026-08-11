@@ -1,0 +1,28 @@
+{
+  "name": "adk-travel-agent-typescript",
+  "version": "1.0.0",
+  "description": "Travel booking agent using Google ADK TypeScript SDK",
+  "scripts": {
+    "start": "tsx src/main-sequential.ts",
+    "start:sequential": "tsx src/main-sequential.ts",
+    "start:orchestrator": "tsx src/main-orchestrator.ts",
+    "dev": "tsx watch src/main-sequential.ts",
+    "dev:orchestrator": "tsx watch src/main-orchestrator.ts",
+    "build": "tsc",
+    "adk:run:sequential": "adk run src/agents-sequential.ts",
+    "adk:run:orchestrator": "adk run src/agents-orchestrator.ts",
+    "adk:web": "adk web"
+  },
+  "dependencies": {
+    "@google/adk": "^0.6.0",
+    "dotenv": "^16.4.7",
+    "monocle2ai": "0.4.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@google/adk-devtools": "^0.6.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
