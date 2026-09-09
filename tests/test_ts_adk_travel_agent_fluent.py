@@ -36,8 +36,6 @@ def test_flight_booking(monocle_trace_asserter: TraceAssertion):
     asserter.under_duration(5.7, units="seconds", span_type="agent_turn")
 
     # Eval assertions (require an eval service, e.g. Okahu)
-    # eval discovery skipped: OKAHU_API_KEY not configured
-
     monocle_trace_asserter.with_evaluation("okahu").check_eval("frustration", expected="ok")
     # monocle_trace_asserter.with_evaluation("okahu").check_eval("sentiment", not_expected="negative")
     # monocle_trace_asserter.with_evaluation("okahu").check_eval("toxicity", not_expected="toxic")

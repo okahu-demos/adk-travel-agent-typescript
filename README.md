@@ -318,15 +318,7 @@ pytest -v -s test_ts_adk_travel_agent_fluent.py
 
 ### Writing a new test
 
-`monocle_test_tools` ships a generator that reads a trace and emits a test asserting on what actually happened in it — a starting point rather than a finished test, since it pins the model's exact wording and the turn's exact token count:
-
-```bash
-python -m monocle_test_tools generate_test --trace-id <trace_id> --workflow-name adk-travel-agent-typescript
-```
-
-It also accepts `--trace-file <path>` for a local trace, `--session-id` to cover a whole multi-turn session, and `--eval NAME=EXPECTED --eval-source okahu` to inject eval assertions. Output goes to stdout; `--help` lists the rest.
-
-[`tests/test_ts_adk_travel_agent_fluent.py`](tests/test_ts_adk_travel_agent_fluent.py) started life this way and was then loosened by hand — worth reading as a worked example of which generated assertions are worth keeping.
+Refer to [Monocle test tools](https://github.com/monocle2ai/monocle/tree/main/test_tools) for understanding how the test generation works.
 
 ### What the assertions look like
 
