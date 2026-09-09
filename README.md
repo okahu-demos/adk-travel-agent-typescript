@@ -2,7 +2,7 @@
 
 A multi-agent travel booking assistant built with the [Google Agent Development Kit (ADK)](https://github.com/google/adk) TypeScript SDK. Specialized sub-agents handle flight booking, hotel booking, and trip summarization.
 
-This is a TypeScript port of the Python [okahu-demos/adk-travel-agent](https://github.com/okahu-demos/adk-travel-agent) project. It is instrumented with [Monocle](https://github.com/monocle2ai/monocle) for distributed tracing, exporting spans to a local file and/or [Okahu](https://www.okahu.ai/).
+It is instrumented with [Monocle](https://github.com/monocle2ai/monocle) for distributed tracing, exporting spans to a local file and/or [Okahu](https://www.okahu.ai/).
 
 ## What it does
 
@@ -60,19 +60,18 @@ Passing a request as a CLI argument runs a single turn and exits.
 
 ## Tracing (Monocle → Okahu)
 
-Each entry point calls `setupMonocle('adk-travel-agent-ts')` *before* `require`-ing the agent module:
+There is no tracing code in `src/` at all — instrumentation is pure configuration. `.env` carries:
 
-```ts
-require('dotenv/config');
-const { setupMonocle } = require('monocle2ai');
-
-setupMonocle('adk-travel-agent-ts');
-
-const { rootAgent } = require('./agents-sequential.js');
-const { runCliWithSession } = require('./runner.js');
+```bash
+NODE_OPTIONS=--import monocle2ai/register
+MONOCLE_WORKFLOW_NAME=adk-travel-agent-typescript
 ```
 
-Ordering is the whole trick. `require()` runs inline rather than being hoisted the way `import` is, so `setupMonocle()` installs its CommonJS `require`-hook before ADK is ever loaded. The hook transparently wraps ADK and the underlying `@google/genai` SDK, so every agent run, tool call, and LLM request emits a span with **no tracing code in the agent logic itself**. This is also why the entry points use `require` instead of `import`.
+Node applies `NODE_OPTIONS` from an env file *before* it loads the app, so the `monocle2ai/register` preload runs `setupMonocle(MONOCLE_WORKFLOW_NAME)` ahead of the entry point's first `require`. `setupMonocle` installs a CommonJS `require`-hook, and because it is in place before ADK is ever loaded, the hook transparently wraps ADK and the underlying `@google/genai` SDK. Every agent run, tool call, and LLM request emits a span with **no tracing code in the agent logic itself**. This is also why the entry points use `require` instead of `import` — `require()` runs inline rather than being hoisted, keeping the load order predictable.
+
+`MONOCLE_WORKFLOW_NAME` is the name traces are filed under, in both the local filenames and Okahu. The [test suite](#testing-against-traces) has to be pointed at the same name.
+
+> **Gotcha:** the preload only takes effect for scripts that pass the env file to Node — `npm start`, `npm run start:orchestrator` and `npm run dev*` use `--env-file=.env`, so they are traced. `npm run start:sequential` does not, and its in-process `require('dotenv/config')` sets `NODE_OPTIONS` far too late to matter, so **that script produces no traces**. Use `npm start` when you are collecting traces to test against.
 
 Spans are exported per the `MONOCLE_EXPORTER` env var:
 
@@ -89,16 +88,7 @@ workflow                    [workflow]
       └─ adk.tool                  [agentic.tool.invocation]
 ```
 
-> **Note:** Monocle batches spans and flushes on a timer (`MONOCLE_EXPORTER_DELAY`, default 5000 ms), so after printing its answer the process lingers a few seconds before exiting. A hard `SIGTERM`/`Ctrl-C` arriving before the next flush can drop buffered spans. To export them deterministically on exit, force a flush via the global tracer provider in the entry point:
->
-> ```ts
-> import { trace } from '@opentelemetry/api';
-> const provider = (trace.getTracerProvider() as { getDelegate?: () => { forceFlush?: () => Promise<void>; shutdown?: () => Promise<void> } }).getDelegate?.();
-> const flush = async () => { await provider?.forceFlush?.(); await provider?.shutdown?.(); };
-> process.on('beforeExit', flush);
-> process.on('SIGINT', async () => { await flush(); process.exit(0); });
-> process.on('SIGTERM', async () => { await flush(); process.exit(0); });
-> ```
+> **Note:** Monocle batches spans and flushes them asynchronously, so a run does not write its trace the instant it prints an answer. The `monocle2ai/register` preload holds the event loop open on `beforeExit` for `MONOCLE_FLUSH_MS` (default 6000 ms) to give that flush time to land, which is why the process lingers a few seconds before exiting. A hard `Ctrl-C`/`SIGTERM` skips the hold and can drop buffered spans — so let a run exit on its own when you are collecting a trace to test against.
 
 ## Project layout
 
@@ -110,8 +100,14 @@ src/
   agents-orchestrator.ts # Agent definitions composed with an LlmAgent supervisor + AgentTool
   runner.ts              # Shared CLI: session creation, run loop, event handling
   tools.ts               # FunctionTool definitions with Zod schemas
+tests/
+  conftest.py            # Loads .env.test and puts the project root on sys.path
+  test_ts_adk_travel_agent_fluent.py   # Trace assertions for a flight-booking turn
+  .monocle/test_traces/  # Traces of the test run itself (created at runtime)
 .monocle/                # Local span output (created at runtime when MONOCLE_EXPORTER includes "file")
-.env.example             # Template for required env vars
+.env.example             # Template for the agent's env vars
+.env.test.example        # Template for the test suite's env vars
+requirements.txt         # Python test dependencies
 tsconfig.json
 package.json
 LICENSE
@@ -122,10 +118,15 @@ LICENSE
 - **`@google/adk`** (`^0.6.0`) — the Agent Development Kit; provides `LlmAgent`, `SequentialAgent`, `AgentTool`, `FunctionTool`, `InMemoryRunner`, and event helpers.
 - **`@google/adk-devtools`** (`^0.6.0`) — provides the `adk` CLI (`adk run`, `adk web`).
 - **`zod`** (`^4.3.6`) — tool parameter schemas. Import from `zod/v4`; ADK compiles against Zod v4.
-- **`monocle2ai`** (`0.4.0`) — distributed tracing, pinned exactly.
+- **`monocle2ai`** (`^0.4.1`) — distributed tracing. Loaded as a preload via `NODE_OPTIONS`, not imported by `src/`.
 - **`dotenv`** — loads API keys and config from `.env`.
 - **`tsx`** — runs TypeScript directly for dev/start scripts.
 - **`typescript`** — for the `build` script.
+
+Python, for the trace tests only (see [`requirements.txt`](requirements.txt)):
+
+- **`monocle_test_tools`** (`0.8.14`) — fluent trace assertions, the `generate_test` CLI, and the pytest plugin providing `monocle_trace_asserter`.
+- **`python-dotenv`** — loads `.env.test` in `tests/conftest.py`.
 
 ## Setup
 
@@ -134,6 +135,7 @@ LICENSE
 - Node.js 20+
 - A Google GenAI API key ([get one here](https://aistudio.google.com/apikey))
 - An Okahu API key, only if you want to export traces to Okahu
+- Python 3.10+, only if you want to run the [trace tests](#testing-against-traces)
 
 > This project runs as **CommonJS** (`tsx`/`node`); there is no `"type": "module"` in `package.json`.
 
@@ -160,7 +162,7 @@ MAX_OUTPUT_TOKENS=1000
 
 # --- Monocle tracing (optional; omit this block to run without tracing) ---
 MONOCLE_EXPORTER=file,okahu        # "file" → ./.monocle/*.json, "okahu" → Okahu
-MONOCLE_TEST_WORKFLOW_NAME=adk-travel-agent-ts
+MONOCLE_WORKFLOW_NAME=adk-travel-agent-typescript
 MONOCLE_ISOLATE_SPANS=true
 MONOCLE_INCLUDE_ALL_SPANS=false
 LOG_LEVEL=error
@@ -238,3 +240,108 @@ npm run build     # type-check and emit compiled JS to dist/
 | `npm run adk:run:sequential` | Run the sequential agent module through the ADK CLI. |
 | `npm run adk:run:orchestrator` | Run the orchestrator agent module through the ADK CLI. |
 | `npm run adk:web` | Launch the ADK web dev UI. |
+
+## Testing against traces
+
+The agent is TypeScript, but its tests are Python. They never run the agent — they run against the **traces** it emitted, asserting on which agents and tools were invoked, what they produced, how many tokens the turn burned, how long it took, and how the turn scores on Okahu's evals. The machinery is [`monocle_test_tools`](https://pypi.org/project/monocle-test-tools/), whose pytest plugin supplies the `monocle_trace_asserter` fixture the tests take as an argument.
+
+### Install
+
+```bash
+python3 -m venv .venv-tests
+source .venv-tests/bin/activate
+pip install -r requirements.txt
+```
+
+`monocle_test_tools` pulls in `torch` (via `bert-score` / `sentence-transformers`, used by the built-in similarity evals), so the resulting venv lands around 1.2 GB and the install takes a few minutes.
+
+### Configure
+
+Copy the template and fill it in:
+
+```bash
+cp .env.test.example .env.test
+```
+
+```bash
+OKAHU_API_KEY=<your_okahu_api_key>            # reading traces and running evals
+OKAHU_API_ENDPOINT=<api_url>                  # where the tests read traces back from
+OKAHU_EVALUATION_ENDPOINT=<eval_url>          # where check_eval() runs
+OKAHU_INGESTION_ENDPOINT=<ingest_url>         # where test-result traces are sent
+MONOCLE_EXPORTER=file,okahu
+MONOCLE_TEST_WORKFLOW_NAME=adk-travel-agent-typescript
+```
+
+[`tests/conftest.py`](tests/conftest.py) loads `.env.test` in `pytest_configure` with `override=True`, and skips it when the file is absent — so in CI you set the same variables in the environment and ship no file.
+
+Two things are easy to conflate here, because both are "a workflow name":
+
+- **The trace under test** is chosen by the explicit `workflow_name=` argument passed to `with_trace_source("okahu", ...)` inside each test. That is the one that has to match the `MONOCLE_WORKFLOW_NAME` the *agent* ran under.
+- **`MONOCLE_TEST_WORKFLOW_NAME`** names the traces the *test run itself* emits. The suite is instrumented too: each test's pass/fail and assertion messages are exported per `MONOCLE_EXPORTER`, to `./.monocle/test_traces/` and/or to `OKAHU_INGESTION_ENDPOINT`. Set it to anything you like — keeping it equal to the agent's workflow name simply files both under one name in Okahu.
+
+Nothing in `.env.test` overlaps with the agent's `.env`; the two are read by different processes and can hold different Okahu keys.
+
+### Running the tests
+
+**1. Run a turn and let it finish.** Use `npm start` (not `start:sequential` — see the gotcha under [Tracing](#tracing-monocle--okahu)) and let the process exit on its own so the spans flush:
+
+```bash
+npm start -- "book me a flight from bom to sfo"
+```
+
+With `MONOCLE_EXPORTER=file,okahu` you get both a local copy and an Okahu-side trace. The local filename carries the trace id:
+
+```
+.monocle/monocle_trace_<workflow>_<trace_id>_<timestamp>.json
+                                  ^^^^^^^^^^
+```
+
+**2. Point the test at that trace.** In [`tests/test_ts_adk_travel_agent_fluent.py`](tests/test_ts_adk_travel_agent_fluent.py), set the trace source to the run you just made — by trace id from Okahu, or by path to the local file:
+
+```python
+asserter.with_trace_source("okahu", id="<trace_id>", workflow_name="adk-travel-agent-typescript")
+# or
+asserter.with_trace_source("file", trace_path="../.monocle/monocle_trace_....json")
+```
+
+**3. Run it**, from inside `tests/`:
+
+```bash
+source .venv-tests/bin/activate
+cd tests
+pytest -v -s test_ts_adk_travel_agent_fluent.py
+```
+
+`-v` names each test as it runs, `-s` lets the assertion output through instead of capturing it. Drop the filename to run everything in the directory.
+
+> Run from `tests/`, not the project root. The suite writes its own traces to `./.monocle/test_traces/` relative to the working directory, so running from the root scatters them into the agent's `.monocle/` alongside the traces you are testing.
+
+### Writing a new test
+
+`monocle_test_tools` ships a generator that reads a trace and emits a test asserting on what actually happened in it — a starting point rather than a finished test, since it pins the model's exact wording and the turn's exact token count:
+
+```bash
+python -m monocle_test_tools generate_test --trace-id <trace_id> --workflow-name adk-travel-agent-typescript
+```
+
+It also accepts `--trace-file <path>` for a local trace, `--session-id` to cover a whole multi-turn session, and `--eval NAME=EXPECTED --eval-source okahu` to inject eval assertions. Output goes to stdout; `--help` lists the rest.
+
+[`tests/test_ts_adk_travel_agent_fluent.py`](tests/test_ts_adk_travel_agent_fluent.py) started life this way and was then loosened by hand — worth reading as a worked example of which generated assertions are worth keeping.
+
+### What the assertions look like
+
+After naming a trace source, a test asserts against it:
+
+| Assertion | Checks |
+| --- | --- |
+| `called_agent("adk_flight_booking_agent")` | that sub-agent was invoked at all |
+| `.contains_input(text)` / `.contains_output(text)` | a substring of what went in or came out |
+| `.contains_any_output(a, b, c)` | at least one of several substrings — the looser form, better for LLM wording |
+| `called_tool("adk_book_flight", "adk_flight_booking_agent")` | the tool ran, from that agent |
+| `under_token_limit(n)` | total tokens for the turn — a cost regression guard |
+| `under_duration(n, units="seconds", span_type="agent_turn")` | turn latency |
+| `with_evaluation("okahu").check_eval("frustration", expected="ok")` | an LLM-judged eval, scored server-side by Okahu |
+
+`check_eval` also takes `not_expected=` for negative assertions (`sentiment`, `toxicity`), and `fact_name=` to score at a different level — `inferences`, `agentic_turns`, or `agentic_sessions` — rather than the whole trace.
+
+Assertions are collected rather than raised one at a time: the plugin fails the test at the end with every failure reported together, so one run tells you everything that drifted.

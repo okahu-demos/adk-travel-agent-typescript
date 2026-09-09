@@ -1,0 +1,22 @@
+# Python test dependencies for the trace-assertion suite in tests/.
+#
+#   python3 -m venv .venv-tests
+#   source .venv-tests/bin/activate
+#   pip install -r requirements.txt
+#
+# Then run the suite from inside tests/:
+#   cd tests && pytest -v -s test_ts_adk_travel_agent_fluent.py
+#
+# The agent itself is TypeScript (see package.json) — these packages are only
+# needed to assert against the traces it emits.
+
+# Fluent trace assertions, the trace generator CLI, and the pytest plugin that
+# provides the `monocle_trace_asserter` fixture. Pulls in monocle-apptrace,
+# pytest, pytest-asyncio, and the model deps used by the built-in evals
+# (bert-score / sentence-transformers / transformers → torch); the resulting
+# venv is around 1.2 GB.
+monocle_test_tools==0.8.14
+
+# tests/conftest.py loads .env.test via load_dotenv(); not a transitive dep of
+# monocle_test_tools, so it has to be listed here.
+python-dotenv>=1.0.0
