@@ -169,6 +169,8 @@ LOG_LEVEL=error
 # Required only when "okahu" is in MONOCLE_EXPORTER:
 OKAHU_API_KEY=<your_okahu_api_key>
 OKAHU_INGESTION_ENDPOINT=https://okahu-ingestion-dev-scus.azurewebsites.net/api/v1/trace/ingest
+# Preload monocle
+NODE_OPTIONS=--import monocle2ai/register
 ```
 
 Notes:
